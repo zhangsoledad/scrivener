@@ -4,6 +4,7 @@ defmodule ScrivenerTest do
   alias Scrivener.Post
   alias Scrivener.Comment
   alias Scrivener.KeyValue
+  alias Scrivener.Author
 
   defp create_posts do
     unpublished_post = %Post{
@@ -37,7 +38,44 @@ defmodule ScrivenerTest do
     end)
   end
 
+  defp create_nested_posts do
+    posts = Enum.map(1..3, fn nr ->
+      %Post{
+        title: "Title #{nr}",
+        body: "Body #{nr}",
+        published: false
+      } |> Scrivener.Repo.insert!
+    end)
+
+    authors = Enum.map(1..3, fn nr ->
+      %Author{
+        name: "Random Name #{nr}"
+      } |> Scrivener.Repo.insert!
+    end)
+
+    Enum.each(authors, fn a ->
+      Enum.each(posts, fn p ->
+        %Comment{
+          body: "Body #{a.name} #{p.title}",
+          author_id: a.id,
+          post_id: p.id
+        } |> Scrivener.Repo.insert!
+      end)
+    end)
+  end
+
   describe "paginate" do
+    it "paginates the simplest query" do
+      create_posts
+
+      page = Post |> Scrivener.Repo.paginate
+
+      assert page.page_size == 5
+      assert page.page_number == 1
+      assert page.total_entries == 7
+      assert page.total_pages == 2
+    end
+
     it "uses defaults from the repo" do
       posts = create_posts
 
@@ -139,6 +177,25 @@ defmodule ScrivenerTest do
       |> Scrivener.Repo.paginate
 
       assert page.total_entries == 7
+    end
+
+    it "can be used with nested joins" do
+      create_nested_posts
+
+      page = Post
+      |> join(:left, [p], c in assoc(p, :comments))
+      |> join(:left, [p, c], a in assoc(c, :author))
+      |> preload([p, c, a], [comments: [:author]])
+      |> order_by([p], desc: p.body)
+      |> Scrivener.Repo.paginate(%{"page_size" => 2})
+
+      [first, second] = page.entries
+
+      assert page.total_entries == 3
+      assert Enum.count(first.comments) == 3
+
+      assert first.body == "Body 3"
+      assert second.body == "Body 2"
     end
   end
 end

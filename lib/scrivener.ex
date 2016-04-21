@@ -94,6 +94,7 @@ defmodule Scrivener do
   """
   @spec paginate(Ecto.Query.t, Scrivener.Config.t) :: Scrivener.Page.t
   def paginate(query, %Config{page_size: page_size, page_number: page_number, repo: repo}) do
+    query = Ecto.Queryable.to_query(query)
     total_entries = total_entries(query, repo)
 
     %Page{
@@ -143,22 +144,50 @@ defmodule Scrivener do
   defp entries(query, repo, page_number, page_size) do
     offset = page_size * (page_number - 1)
 
+    if joins?(query) do
+      ids = query
+      |> remove_clauses
+      |> select([x], {x.id})
+      |> group_by([x], x.id)
+      |> offset(^offset)
+      |> limit(^page_size)
+      |> repo.all
+      |> Enum.map(&elem(&1, 0))
+
+      query
+      |> where([x], x.id in ^ids)
+      |> distinct(true)
+      |> repo.all
+    else
+      query
+      |> limit([_], ^page_size)
+      |> offset([_], ^offset)
+      |> repo.all
+    end
+  end
+
+  defp joins?(query) do
+    Enum.count(query.joins) > 0
+  end
+
+  defp remove_clauses(query) do
     query
-    |> limit([_], ^page_size)
-    |> offset([_], ^offset)
-    |> repo.all
+    |> exclude(:preload)
+    |> exclude(:select)
+    |> exclude(:group_by)
   end
 
   defp total_entries(query, repo) do
-    stripped_query = query
+    primary_key = query.from
+    |> elem(1)
+    |> apply(:__schema__, [:primary_key])
+    |> hd
+
+    query
+    |> remove_clauses
     |> exclude(:order_by)
-    |> exclude(:preload)
-    |> exclude(:select)
-
-    {query_sql, parameters} =  Ecto.Adapters.SQL.to_sql(:all, repo, stripped_query)
-    {:ok, %{num_rows: 1, rows: [[count]]}} = Ecto.Adapters.SQL.query(repo, "SELECT count(*) FROM (#{query_sql}) AS temp", parameters)
-
-    count
+    |> select([m], count(field(m, ^primary_key), :distinct))
+    |> repo.one!
   end
 
   defp total_pages(total_entries, page_size) do
